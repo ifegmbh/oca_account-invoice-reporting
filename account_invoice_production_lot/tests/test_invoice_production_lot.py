@@ -14,15 +14,6 @@ class TestProdLot(TransactionCase):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
-        if not cls.env.company.chart_template_id:
-            # Load a CoA if there's none in current company
-            coa = cls.env.ref("l10n_generic_coa.configurable_chart_template", False)
-            if not coa:
-                # Load the first available CoA
-                coa = cls.env["account.chart.template"].search(
-                    [("visible", "=", True)], limit=1
-                )
-            coa.try_loading(company=cls.env.company, install_demo=False)
         cls.user_company = cls.env.user.company_id
         cls.partner = cls.env["res.partner"].create(
             {"name": "Test partner", "lang": "en_US"}
@@ -75,18 +66,13 @@ class TestProdLot(TransactionCase):
                 "company_id": cls.user_company.id,
             }
         )
+        cls.location = cls.env.ref("stock.stock_location_stock")
 
     def qty_on_hand(self, product, quantity, lot):
         """Update Product quantity."""
-        res = product.action_update_quantity_on_hand()
-        stock_quant_form = Form(
-            self.env["stock.quant"].with_context(**res["context"]),
-            view="stock.view_stock_quant_tree_inventory_editable",
+        self.env["stock.quant"]._update_available_quantity(
+            product, self.location, lot_id=lot, quantity=quantity
         )
-        stock_quant_form.inventory_quantity = quantity
-        stock_quant_form.lot_id = lot
-        quant = stock_quant_form.save()
-        quant.action_apply_inventory()
 
     def test_00_sale_stock_invoice_product_lot(self):
         # update quantities with their related lots
@@ -98,9 +84,7 @@ class TestProdLot(TransactionCase):
         picking = self.sale.picking_ids[:1]
         picking.action_confirm()
         picking.action_assign()
-        for sml in picking.move_ids.mapped("move_line_ids"):
-            sml.qty_done = sml.reserved_qty
-        picking._action_done()
+        picking.button_validate()
         # create invoice
         invoice = self.sale._create_invoices()
         self.assertEqual(len(invoice.invoice_line_ids), 2)
@@ -124,7 +108,8 @@ class TestProdLot(TransactionCase):
         picking.action_confirm()
         picking.action_assign()
         # deliver partially only one lot
-        picking.move_ids[0].move_line_ids[0].write({"qty_done": 2.0})
+        picking.move_ids[0].move_line_ids[0].write({"quantity": 2.0})
+        picking.move_ids[0].move_line_ids[1].write({"quantity": 0.0})
         backorder_wizard_dict = picking.button_validate()
         backorder_wiz = Form(
             self.env[backorder_wizard_dict["res_model"]].with_context(
@@ -154,8 +139,8 @@ class TestProdLot(TransactionCase):
         picking.action_confirm()
         picking.action_assign()
         # deliver partially both lots
-        picking.move_ids[0].move_line_ids[0].write({"qty_done": 1.0})
-        picking.move_ids[0].move_line_ids[1].write({"qty_done": 1.0})
+        picking.move_ids[0].move_line_ids[0].write({"quantity": 1.0})
+        picking.move_ids[0].move_line_ids[1].write({"quantity": 1.0})
         backorder_wizard_dict = picking.button_validate()
         backorder_wiz = Form(
             self.env[backorder_wizard_dict["res_model"]].with_context(
